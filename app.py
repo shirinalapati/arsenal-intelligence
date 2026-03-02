@@ -1402,6 +1402,51 @@ elif page == "About":
         </div>
         """, unsafe_allow_html=True)
 
+    # ── Technical Challenges
+    st.markdown(f"""
+    <div style='background:{CARD_BG}; border-radius:12px; padding:24px 28px;
+                border:1px solid #2A2D3A; margin-top:4px; margin-bottom:20px;'>
+        <div style='color:{ACCENT_COLOR}; font-weight:800; font-size:1.15rem;
+                    margin-bottom:16px;'>Technical Challenges</div>
+        <div style='display:flex; gap:16px; flex-wrap:wrap;'>
+
+            <div style='flex:1; min-width:220px; background:{DARK_BG}; border-radius:10px;
+                        padding:16px 18px; border-left:3px solid {ACCENT_COLOR};'>
+                <div style='color:{WHITE}; font-weight:700; font-size:0.88rem;
+                            margin-bottom:8px;'>Determining the Right Thresholds</div>
+                <div style='color:{TEXT_MUTED}; font-size:0.82rem; line-height:1.7;'>
+                    The hardest design decision was choosing minimum sample thresholds at three different levels — each with a different purpose:
+                    <br><br>
+                    <b style='color:{WHITE};'>Pitcher qualification (SP: 500 pitches, RP: 200 pitches)</b> — Relievers throw far fewer pitches per season by design, so a single threshold would either flood the leaderboard with 10-appearance cup-of-coffee relievers or exclude legitimate starters. Role-specific floors were the only fair solution.
+                    <br><br>
+                    <b style='color:{WHITE};'>Pitch type model inclusion (2,000 swing events)</b> — A logistic regression needs sufficient data to produce stable, trustworthy coefficients. Pitch types below this floor (e.g., screwballs: ~236 total league-wide swings) produced wildly unstable weights. The 2,000-swing threshold was the minimum at which cross-validated AUC became consistent across resamples.
+                    <br><br>
+                    <b style='color:{WHITE};'>SHAP pitcher breakdown (100 pitches of type)</b> — Individual SHAP values average out to something meaningful only with a reasonable sample. Below 100 pitches of a given type, a pitcher's SHAP profile is dominated by single at-bat noise rather than genuine tendencies. 100 was chosen as the point where pitcher-level averages stopped fluctuating wildly on recomputation.
+                </div>
+            </div>
+
+            <div style='flex:1; min-width:220px; background:{DARK_BG}; border-radius:10px;
+                        padding:16px 18px; border-left:3px solid {ACCENT_COLOR};'>
+                <div style='color:{WHITE}; font-weight:700; font-size:0.88rem;
+                            margin-bottom:8px;'>Data Retrieval at Scale</div>
+                <div style='color:{TEXT_MUTED}; font-size:0.82rem; line-height:1.7;'>
+                    Fetching ~2.16 million pitches from Baseball Savant via the <code style='background:#2A2D3A; padding:1px 5px; border-radius:3px; color:{WHITE};'>pybaseball</code> API was unreliable in bulk — large date-range requests regularly dropped mid-stream. The solution was chunking requests into weekly windows with automatic retry logic, then stitching the chunks into a single Parquet file for efficient downstream loading.
+                </div>
+            </div>
+
+            <div style='flex:1; min-width:220px; background:{DARK_BG}; border-radius:10px;
+                        padding:16px 18px; border-left:3px solid {ACCENT_COLOR};'>
+                <div style='color:{WHITE}; font-weight:700; font-size:0.88rem;
+                            margin-bottom:8px;'>Expanding SHAP to All Pitch Types & Seasons</div>
+                <div style='color:{TEXT_MUTED}; font-size:0.82rem; line-height:1.7;'>
+                    SHAP values were initially computed only for four-seam fastballs in the most recent season. Extending them to every pitch type across all three seasons required training a separate gradient-boosted model per pitch type × role combination (18 models total), then computing and storing per-pitcher SHAP averages for every season — a significant compute and storage expansion that had to be decoupled into a separate recompute script to keep iteration times manageable.
+                </div>
+            </div>
+
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     show_glossary()
 
     st.markdown("<br><br>", unsafe_allow_html=True)
