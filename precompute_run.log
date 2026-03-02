@@ -1,0 +1,72 @@
+Loading data...
+  2,164,485 pitches loaded
+  2,132,779 clean pitches
+Classifying pitcher roles...
+  Override: pitcher 676477 season 2023 → RP
+  SP pitches: 1,260,018 | RP pitches: 872,761
+
+Fitting models (SP and RP separately)...
+
+  SP pitch types: ['Four-Seam FB', 'Sinker', 'Slider', 'Changeup', 'Cutter', 'Curveball', 'Sweeper', 'Splitter', 'Knuckle-Curve', 'Slurve']
+    SP Four-Seam FB         n=200,819 | whiff%=20.9% | AUC=0.674
+    SP Sinker               n= 83,592 | whiff%=12.8% | AUC=0.538
+    SP Slider               n= 80,160 | whiff%=32.3% | AUC=0.735
+    SP Changeup             n= 76,648 | whiff%=30.6% | AUC=0.695
+    SP Cutter               n= 52,019 | whiff%=22.1% | AUC=0.549
+    SP Curveball            n= 42,287 | whiff%=30.6% | AUC=0.781
+    SP Sweeper              n= 33,471 | whiff%=31.1% | AUC=0.720
+    SP Splitter             n= 19,110 | whiff%=32.1% | AUC=0.737
+    SP Knuckle-Curve        n= 12,842 | whiff%=33.4% | AUC=0.811
+    SP Slurve               n=  2,907 | whiff%=29.8% | AUC=0.764
+
+  RP pitch types: ['Four-Seam FB', 'Slider', 'Sinker', 'Changeup', 'Cutter', 'Sweeper', 'Curveball', 'Splitter', 'Knuckle-Curve']
+    RP Four-Seam FB         n=133,026 | whiff%=23.3% | AUC=0.670
+    RP Slider               n= 79,923 | whiff%=34.9% | AUC=0.736
+    RP Sinker               n= 68,417 | whiff%=15.2% | AUC=0.547
+    RP Changeup             n= 36,027 | whiff%=31.8% | AUC=0.703
+    RP Cutter               n= 31,745 | whiff%=25.2% | AUC=0.556
+    RP Sweeper              n= 30,330 | whiff%=32.4% | AUC=0.699
+    RP Curveball            n= 16,457 | whiff%=31.8% | AUC=0.775
+    RP Splitter             n= 12,908 | whiff%=37.6% | AUC=0.751
+    RP Knuckle-Curve        n=  4,717 | whiff%=37.8% | AUC=0.839
+
+  Saved model_coefs.parquet
+Scoring pitches...
+  2,130,084 pitches scored
+Aggregating pitcher stats...
+  Saved pitch_type_scores.parquet
+  Saved arsenal_scores.parquet
+  Saved decile_outcomes.parquet
+  Saved pitch_type_summary.parquet
+
+Training SHAP models for all pitch types (SP and RP)...
+  SP Changeup             n= 76,648 | trained OK
+  SP Curveball            n= 42,287 | trained OK
+  SP Cutter               n= 52,019 | trained OK
+  SP Four-Seam FB         n=200,819 | trained OK
+  SP Knuckle-Curve        n= 12,842 | trained OK
+  SP Sinker               n= 83,592 | trained OK
+  SP Slider               n= 80,160 | trained OK
+  SP Slurve               n=  2,907 | trained OK
+  SP Splitter             n= 19,110 | trained OK
+  SP Sweeper              n= 33,471 | trained OK
+  RP Changeup             n= 36,027 | trained OK
+  RP Curveball            n= 16,457 | trained OK
+  RP Cutter               n= 31,745 | trained OK
+  RP Four-Seam FB         n=133,026 | trained OK
+  RP Knuckle-Curve        n=  4,717 | trained OK
+  RP Sinker               n= 68,417 | trained OK
+  RP Slider               n= 79,923 | trained OK
+  RP Slurve               n=  1,173 | trained OK
+  RP Splitter             n= 12,908 | trained OK
+  RP Sweeper              n= 30,330 | trained OK
+  Saved shap_values_allpitch.parquet (110,797 rows)
+  Saved shap_values_4seam.parquet    (12,000 rows, backward compat)
+Computing per-pitcher SHAP breakdown (all pitch types)...
+  Saved pitcher_shap_allpitch.parquet (1933 rows)
+  Saved pitcher_shap_4seam.parquet    (500 rows, backward compat)
+
+============================================================
+All outputs saved.
+  Seasons: 2023–2025  |  Roles: SP, RP
+  2025 qualified pitchers: 268 SP | 586 RP

@@ -1,0 +1,19 @@
+# Raw Statcast data (too large for GitHub)
+data/statcast_*.parquet
+
+# Trained GBC model pickles (can be regenerated)
+data/shap_gbc*.pkl
+data/shap_gbc.pkl
+
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
