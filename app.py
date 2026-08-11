@@ -119,6 +119,19 @@ arsenal, pt_scores, coefs, decile, pt_summary, shap_global, shap_pitch = load_da
 
 SEASONS       = sorted(arsenal["season"].unique(), reverse=True)
 CURRENT_SEASON = max(SEASONS) if len(SEASONS) else 2026
+POOLED_SEASONS_LABEL = "2023–2026"
+POOLED_SEASONS_KEY = "2023-2026"
+
+def _filter_pooled(df: pd.DataFrame, role_code: str) -> pd.DataFrame:
+    """Rows for pooled 2023–2026 aggregates (decile validation, pitch-type table)."""
+    role = role_code if role_code != "ALL" else "ALL"
+    out = df[df["role"] == role]
+    if "season_scope" in out.columns:
+        out = out[out["season_scope"] == POOLED_SEASONS_KEY]
+    return out
+
+_pooled_pt = _filter_pooled(pt_summary, "ALL")
+TOTAL_PITCHES = int(_pooled_pt["n_pitches"].sum()) if not _pooled_pt.empty else 0
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 LAST_UPDATED_PATH = os.path.join(DATA_DIR, "last_updated.txt")
 last_updated = ""
@@ -251,7 +264,7 @@ with st.sidebar:
         if _override is not None:
             season_filter = st.selectbox("Season", SEASONS, index=_override, key="season_sel")
         else:
-            season_filter = st.selectbox("Season", SEASONS, key="season_sel")
+            season_filter = st.selectbox("Season", SEASONS, index=0, key="season_sel")
     else:
         st.session_state.pop("_season_override_idx", None)
         season_filter = SEASONS[0]  # default (unused on these tabs)
@@ -302,8 +315,14 @@ if page == "Overview":
         qual = season_arsenal[season_arsenal["total_pitches"] >= min_p]
         st.metric("Qualified Pitchers", len(qual), f"≥ {min_p} pitches")
 
-    st.markdown("<div class='section-header'>Stuff+ vs Outcomes — Decile Validation (All Seasons)</div>", unsafe_allow_html=True)
-    st.markdown(f"<p style='color:{TEXT_MUTED}; font-size:0.88rem;'>Pitches binned into 10 equal groups by Stuff+ score. Higher stuff predicts more whiffs and suppressed contact quality.</p>", unsafe_allow_html=True)
+    st.markdown(f"<div class='section-header'>Stuff+ vs Outcomes — Decile Validation ({POOLED_SEASONS_LABEL})</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<p style='color:{TEXT_MUTED}; font-size:0.88rem;'>"
+        f"Pooled across {POOLED_SEASONS_LABEL} (including live {CURRENT_SEASON} in-season data). "
+        f"Pitches binned into 10 equal groups by Stuff+ score. Higher stuff predicts more whiffs and suppressed contact quality."
+        f"</p>",
+        unsafe_allow_html=True,
+    )
 
     fig = make_subplots(
         rows=1, cols=3,
@@ -312,7 +331,7 @@ if page == "Overview":
     )
     palette = px.colors.diverging.RdYlGn
     step = len(palette) // 10
-    decile_filtered = decile[decile["role"] == ROLE_CODE] if ROLE_CODE != "ALL" else decile[decile["role"] == "ALL"]
+    decile_filtered = _filter_pooled(decile, ROLE_CODE)
 
     for d_row in decile_filtered.itertuples():
         color = palette[min((d_row.stuff_decile - 1) * step, len(palette)-1)]
@@ -359,9 +378,12 @@ if page == "Overview":
 
     # ── Pitch type summary table
     with col_left:
-        st.markdown("<div class='section-header'>Pitch Type Outcomes (All Seasons)</div>", unsafe_allow_html=True)
-        pt_role = ROLE_CODE if ROLE_CODE != "ALL" else "ALL"
-        disp = pt_summary[pt_summary["role"] == pt_role][
+        st.markdown(f"<div class='section-header'>Pitch Type Outcomes ({POOLED_SEASONS_LABEL})</div>", unsafe_allow_html=True)
+        st.caption(
+            f"League-wide averages pooled across {POOLED_SEASONS_LABEL}, including live {CURRENT_SEASON} data. "
+            "Use the season selector for year-by-year distributions in the chart on the right."
+        )
+        disp = _filter_pooled(pt_summary, ROLE_CODE)[
             ["pitch_group","n_pitches","avg_velo","avg_spin","avg_ivb","whiff_rate","csw_rate","avg_xwoba","auc"]
         ].copy()
         disp = disp.sort_values("whiff_rate", ascending=False)
@@ -380,10 +402,13 @@ if page == "Overview":
     with col_right:
         role_label = {"ALL": "All Pitchers", "SP": "Starters (SP)", "RP": "Relievers (RP)"}[ROLE_CODE]
         st.markdown("<div class='section-header'>League-Wide Stuff+ Distribution by Pitch Type (Year by Year)</div>", unsafe_allow_html=True)
-        st.caption(f"Every individual pitch thrown in {season_filter} by {role_label} — pooled across all pitchers. "
-                   "Each violin shows how spread out Stuff+ scores are for that pitch type. "
-                   "All types are centered at 100 by design; width shows variance, tails show outliers. "
-                   "To see a specific pitcher's distribution, use the Pitcher Explorer page.")
+        st.caption(
+            f"Every individual pitch thrown in **{season_filter}** by {role_label} — pooled across all pitchers. "
+            f"Use the **Season** selector in the sidebar (defaults to {CURRENT_SEASON}, the live season). "
+            "Each violin shows how spread out Stuff+ scores are for that pitch type. "
+            "All types are centered at 100 by design; width shows variance, tails show outliers. "
+            "To see a specific pitcher's distribution, use the Pitcher Explorer page."
+        )
         pts = pt_scores[pt_scores["season"] == season_filter]
         if ROLE_CODE != "ALL":
             pts = pts[pts["role"] == ROLE_CODE]
@@ -423,7 +448,7 @@ elif page == "Pitcher Explorer":
     st.caption(
         "**Thresholds:** "
         "A pitcher appears as qualifying for a season if they threw ≥ 500 pitches (SP) or ≥ 200 pitches (RP). "
-        "Their full arsenal is shown for any pitch type with ≥ 2,000 league-wide swing events across 2023–2025 (required to train a reliable model). "
+        "Their full arsenal is shown for any pitch type with ≥ 2,000 league-wide swing events across 2023–2026 (required to train a reliable model). "
         "The SHAP breakdown requires the pitcher to have thrown ≥ 100 of that specific pitch type in the selected season."
     )
     st.divider()
@@ -1009,7 +1034,7 @@ elif page == "How the Model Works + Important Findings":
                 <li><b style='color:{WHITE};'>Plate Location (x, z)</b> — where the ball crosses the zone</li>
             </ul>
             <hr style='border-color:#2A2D3A; margin:16px 0;'>
-            <div style='color:{ACCENT_COLOR}; font-weight:700; margin-bottom:8px;'>Model Performance (5-fold CV AUC) (All Seasons)</div>
+            <div style='color:{ACCENT_COLOR}; font-weight:700; margin-bottom:8px;'>Model Performance (5-fold CV AUC) ({POOLED_SEASONS_LABEL})</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1029,7 +1054,7 @@ elif page == "How the Model Works + Important Findings":
         st.dataframe(auc_df, hide_index=True, use_container_width=True)
 
     with col_right:
-        st.markdown("<div class='section-header'>Feature Weight Heatmap by Pitch Type (All Seasons)</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='section-header'>Feature Weight Heatmap by Pitch Type ({POOLED_SEASONS_LABEL})</div>", unsafe_allow_html=True)
         hm_role_label = {"ALL": "All Pitchers", "SP": "Starters (SP)", "RP": "Relievers (RP)"}[ROLE_CODE]
         st.caption(f"Logistic regression coefficients ({hm_role_label}) — features are z-score scaled so values are directly comparable. Green = drives more whiffs, Red = drives fewer whiffs.")
 
@@ -1065,7 +1090,7 @@ elif page == "How the Model Works + Important Findings":
         st.plotly_chart(fig9, use_container_width=True)
 
         # ── SHAP beeswarm — selectable pitch type
-        st.markdown("<div class='section-header'>SHAP Analysis (All Seasons)</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='section-header'>SHAP Analysis ({POOLED_SEASONS_LABEL})</div>", unsafe_allow_html=True)
 
         label_map = {
             "perceived_velo": "Perceived Velocity",
@@ -1203,13 +1228,13 @@ elif page == "About":
             </p>
             <div style='background:#1e3a5f; border-radius:8px; padding:14px 18px;
                         border:1px solid #2A2D3A; margin:12px 0;'>
-                <div style='color:{ACCENT_COLOR}; font-weight:700; margin-bottom:6px;'>2026 live season</div>
+                <div style='color:{ACCENT_COLOR}; font-weight:700; margin-bottom:6px;'>Live now — {CURRENT_SEASON} season</div>
                 <div style='color:{TEXT_MUTED}; font-size:0.88rem; line-height:1.65;'>
-                    The dashboard includes <b style='color:{WHITE};'>2026 in-season data</b> that refreshes
-                    automatically through the regular season (ends early October). GitHub Actions pulls new
-                    Statcast pitches about <b style='color:{WHITE};'>4× per day</b>; this app reloads data
+                    This dashboard is <b style='color:{WHITE};'>live for the {CURRENT_SEASON} MLB season right now</b>.
+                    In-season Statcast data refreshes automatically through the regular season (ends early October).
+                    GitHub Actions pulls new pitches about <b style='color:{WHITE};'>4× per day</b>; this app reloads data
                     every <b style='color:{WHITE};'>2 minutes</b>. Completed seasons (2023–2025) are frozen
-                    snapshots — selecting those years shows the same scores as before. For 2026, sample sizes
+                    snapshots — selecting those years shows the same scores as before. For {CURRENT_SEASON}, sample sizes
                     are still building: pitchers highlighted in <b style='color:#fbbf24;'>yellow</b> on the
                     Leaderboard are below the current low-sample pitch threshold (~35% of role median).
                     SP/RP labels use the same avg-pitches-per-game rule as prior seasons, supplemented by
@@ -1413,9 +1438,9 @@ elif page == "About":
                 <tr style='border-bottom:1px solid #2A2D3A;'>
                     <td style='padding:10px 12px; color:{WHITE}; font-weight:700; width:25%;'>Overview</td>
                     <td style='padding:10px 12px; color:{TEXT_MUTED};'>
-                        High-level validation of the model. Shows that higher Stuff+ deciles
-                        reliably produce more whiffs and suppress contact quality (xwOBA).
-                        Use it to understand how well the score predicts real outcomes.
+                        High-level validation of the model. Decile charts and the pitch-type outcomes table
+                        pool data across {POOLED_SEASONS_LABEL} (including live {CURRENT_SEASON}). The
+                        Stuff+ distribution violin chart is year-by-year — use the season selector in the sidebar.
                     </td>
                 </tr>
                 <tr style='border-bottom:1px solid #2A2D3A;'>
@@ -1461,8 +1486,8 @@ elif page == "About":
             <div style='color:{TEXT_MUTED}; font-size:0.87rem; line-height:1.8;'>
                 <b style='color:{WHITE};'>Source</b><br>
                 Baseball Savant Statcast<br>
-                MLB seasons 2023, 2024, 2025<br>
-                ~2.16 million individual pitches<br><br>
+                MLB seasons 2023–{CURRENT_SEASON} ({CURRENT_SEASON} live)<br>
+                ~{TOTAL_PITCHES:,} individual pitches<br><br>
                 <b style='color:{WHITE};'>Modeling approach</b><br>
                 L2-penalized logistic regression<br>
                 Fit separately per pitch type<br>

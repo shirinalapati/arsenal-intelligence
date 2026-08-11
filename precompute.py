@@ -21,6 +21,8 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 FROZEN_SEASONS = {2023, 2024, 2025}
 CURRENT_SEASON = 2026
+ANALYSIS_SEASONS = {2023, 2024, 2025, CURRENT_SEASON}
+POOLED_SEASON_SCOPE = "2023-2026"
 
 # ── 1. Load raw data ─────────────────────────────────────────────────────────
 print("Loading data...")
@@ -364,10 +366,11 @@ except Exception as exc:
 pt_out.to_parquet(os.path.join(DATA_DIR, "pitch_type_scores.parquet"), index=False)
 print("  Saved pitch_type_scores.parquet")
 
-# ── 7. Decile validation (per role) ─────────────────────────────────────────
+# ── 7. Decile validation (per role, pooled 2023–2026) ───────────────────────
+pool_df = all_df[all_df["season"].isin(ANALYSIS_SEASONS)]
 decile_frames = []
 for role in ["SP", "RP", "ALL"]:
-    sub = all_df if role == "ALL" else all_df[all_df["role"] == role]
+    sub = pool_df if role == "ALL" else pool_df[pool_df["role"] == role]
     sub = sub.copy()
     sub["stuff_decile"] = (
         pd.qcut(sub["stuff_plus"], q=10, labels=False, duplicates="drop")
@@ -383,17 +386,19 @@ for role in ["SP", "RP", "ALL"]:
     )
     d = base.join(wh).reset_index()
     d["role"] = role
+    d["season_scope"] = POOLED_SEASON_SCOPE
     decile_frames.append(d)
 
 decile_df = pd.concat(decile_frames, ignore_index=True)
 decile_df.to_parquet(os.path.join(DATA_DIR,"decile_outcomes.parquet"), index=False)
 print("  Saved decile_outcomes.parquet")
 
-# ── 8. Pitch-type summary (per role) ────────────────────────────────────────
+# ── 8. Pitch-type summary (per role, pooled 2023–2026) ──────────────────────
+pool_clean = df_clean[df_clean["season"].isin(ANALYSIS_SEASONS)]
 pt_frames = []
-swings = df_clean[df_clean["is_swing"] == 1]
+swings = pool_clean[pool_clean["is_swing"] == 1]
 for role in ["SP", "RP", "ALL"]:
-    sub       = df_clean if role == "ALL" else df_clean[df_clean["role"] == role]
+    sub       = pool_clean if role == "ALL" else pool_clean[pool_clean["role"] == role]
     sub_sw    = swings   if role == "ALL" else swings[swings["role"] == role]
     pt_base   = sub.groupby("pitch_group").agg(
         n_pitches=("is_swing","size"), csw_rate=("is_csw","mean"),
@@ -408,6 +413,7 @@ for role in ["SP", "RP", "ALL"]:
     )
     pt = pt_base.join(pt_whiff).join(auc_series).reset_index()
     pt["role"] = role
+    pt["season_scope"] = POOLED_SEASON_SCOPE
     pt_frames.append(pt)
 
 pt_summary = pd.concat(pt_frames, ignore_index=True)
