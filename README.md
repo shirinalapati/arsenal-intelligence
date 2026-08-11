@@ -1,6 +1,6 @@
-# MLB Pitch Stuff+ Dashboard
+# Arsenal Intelligence — MLB Pitch Stuff+ Dashboard
 
-An interpretable pitch quality scoring model built on 2.16 million Statcast pitches (2023–2025).
+An interpretable pitch quality scoring model built on Statcast pitch-level data (2023–2026).
 
 ## What It Does
 
@@ -8,7 +8,10 @@ Builds a **Stuff+ score** for every MLB pitch — a weighted composite of veloci
 
 ## Live App
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://your-app.streamlit.app)
+Deploy on [Streamlit Community Cloud](https://share.streamlit.io) from this repo (`app.py` entrypoint).  
+Repo: **github.com/shirinalapati/arsenal-intelligence**
+
+**2026 live season:** GitHub Actions refreshes Statcast data **4× daily** through the regular season (ends ~Oct 5). The app reloads parquet outputs every **2 minutes**. Seasons 2023–2025 are frozen benchmarks.
 
 ## Pages
 
