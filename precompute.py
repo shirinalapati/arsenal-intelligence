@@ -19,23 +19,45 @@ import pickle
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
+FROZEN_SEASONS = {2023, 2024, 2025}
+CURRENT_SEASON = 2026
 
 # ── 1. Load raw data ─────────────────────────────────────────────────────────
 print("Loading data...")
-combined_path = os.path.join(DATA_DIR, "statcast_2023_2025.parquet")
-if os.path.exists(combined_path):
-    raw = pd.read_parquet(combined_path)
-else:
-    frames = []
-    for yr in [2023, 2024, 2025]:
-        p = os.path.join(DATA_DIR, f"statcast_{yr}.parquet")
+frames = []
+for yr in [2023, 2024, 2025, CURRENT_SEASON]:
+    p = os.path.join(DATA_DIR, f"statcast_{yr}.parquet")
+    if os.path.exists(p):
         df_yr = pd.read_parquet(p)
         if "season" not in df_yr.columns:
             df_yr["season"] = yr
         frames.append(df_yr)
-    raw = pd.concat(frames, ignore_index=True)
+        print(f"  {yr}: {len(df_yr):,} pitches")
+    elif yr == CURRENT_SEASON:
+        print(f"  {yr}: no file (run fetch_statcast_2026.py)")
 
-print(f"  {len(raw):,} pitches loaded")
+# CI / fresh clone: fall back to combined 2023–2025 bundle if present
+if not any(
+    os.path.exists(os.path.join(DATA_DIR, f"statcast_{y}.parquet")) for y in (2023, 2024, 2025)
+):
+    combined = os.path.join(DATA_DIR, "statcast_2023_2025.parquet")
+    if os.path.exists(combined):
+        print(f"  Loading training bundle → {combined}")
+        bundle = pd.read_parquet(combined)
+        if "season" not in bundle.columns:
+            bundle["season"] = pd.to_numeric(bundle.get("game_date", "").astype(str).str[:4], errors="coerce")
+        for yr in (2023, 2024, 2025):
+            chunk = bundle[bundle["season"] == yr]
+            if len(chunk):
+                frames.append(chunk)
+                print(f"  {yr}: {len(chunk):,} pitches (from bundle)")
+
+if not frames:
+    raise SystemExit("No Statcast parquet files found in data/")
+
+raw = pd.concat(frames, ignore_index=True)
+max_season = int(raw["season"].max())
+print(f"  {len(raw):,} pitches loaded (seasons {sorted(raw['season'].unique())})")
 
 # ── 2. Feature engineering ───────────────────────────────────────────────────
 df = raw.copy()
@@ -131,6 +153,20 @@ for (pid, ssn), override_role in ROLE_OVERRIDES.items():
     avg_per_game.loc[mask, "role"] = override_role
     if mask.any():
         print(f"  Override: pitcher {pid} season {ssn} → {override_role}")
+
+# In-season 2026: supplement with MLB games started / games pitched when sample is thin
+if max_season >= CURRENT_SEASON and (avg_per_game["season"] == CURRENT_SEASON).any():
+    try:
+        from team_utils import fetch_pitcher_roles_2026
+
+        pids_2026 = avg_per_game.loc[avg_per_game["season"] == CURRENT_SEASON, "pitcher"].astype(int).tolist()
+        role_map = fetch_pitcher_roles_2026(pids_2026, CURRENT_SEASON)
+        for pid, role in role_map.items():
+            mask = (avg_per_game["pitcher"] == pid) & (avg_per_game["season"] == CURRENT_SEASON)
+            avg_per_game.loc[mask, "role"] = role
+        print(f"  2026 MLB API role overrides: {len(role_map)} pitchers")
+    except Exception as exc:
+        print(f"  2026 role API skipped: {exc}")
 
 df_clean = df_clean.merge(avg_per_game[["pitcher","season","role","avg_pitches_per_game"]],
                            on=["pitcher","season"], how="left")
@@ -232,10 +268,26 @@ whiff_by_pitch = (
 pitch_base = pitch_base.merge(
     whiff_by_pitch, on=["pitcher","season","role","pitch_group"], how="left"
 )
-pitch_base.to_parquet(os.path.join(DATA_DIR,"pitch_type_scores.parquet"), index=False)
-print("  Saved pitch_type_scores.parquet")
 
-# Arsenal-level (usage-weighted avg Stuff+)
+# ── Merge frozen 2023–2025 rows; keep live 2026 ─────────────────────────────
+def _merge_frozen(computed: pd.DataFrame, stem: str) -> pd.DataFrame:
+    frozen_path = os.path.join(DATA_DIR, f"frozen_{stem}_2023_2025.parquet")
+    if not os.path.exists(frozen_path):
+        return computed
+    frozen = pd.read_parquet(frozen_path)
+    live = computed[computed["season"] == CURRENT_SEASON].copy()
+    if live.empty:
+        return frozen
+    for col in computed.columns:
+        if col not in frozen.columns:
+            frozen[col] = None if computed[col].dtype == object else np.nan
+    for col in frozen.columns:
+        if col not in live.columns:
+            live[col] = None if frozen[col].dtype == object else np.nan
+    cols = [c for c in computed.columns if c in frozen.columns and c in live.columns]
+    return pd.concat([frozen[cols], live[cols]], ignore_index=True)
+
+# Arsenal-level (usage-weighted avg Stuff+) — use full computed pitch_base
 pitch_base["weighted"] = pitch_base["n_pitches"] * pitch_base["stuff_plus"]
 arsenal = (
     pitch_base.groupby(["pitcher","player_name","season","role"])
@@ -268,8 +320,49 @@ arsenal = (
     .merge(season_csw,   on=["pitcher","season","role"], how="left")
     .merge(season_whiff, on=["pitcher","season","role"], how="left")
 )
+
+# Low-sample flag for live 2026 season
+arsenal["low_sample"] = False
+s26 = arsenal[arsenal["season"] == CURRENT_SEASON]
+for role, floor in [("SP", 150), ("RP", 80)]:
+    sub = s26[s26["role"] == role]
+    if sub.empty:
+        continue
+    th = max(floor, float(sub["total_pitches"].median()) * 0.35)
+    mask = (arsenal["season"] == CURRENT_SEASON) & (arsenal["role"] == role) & (arsenal["total_pitches"] < th)
+    arsenal.loc[mask, "low_sample"] = True
+
+arsenal_live = arsenal.copy()
+arsenal = _merge_frozen(arsenal, "arsenal_scores")
+if "low_sample" not in arsenal.columns:
+    arsenal["low_sample"] = False
+try:
+    from team_utils import attach_teams
+    if "team" not in arsenal.columns or arsenal["team"].isna().all():
+        arsenal = attach_teams(arsenal)
+    else:
+        missing = arsenal["team"].isna() | (arsenal["team"] == "")
+        if missing.any():
+            filled = attach_teams(arsenal.loc[missing].drop(columns=["team"], errors="ignore"))
+            arsenal.loc[missing, "team"] = filled["team"].values
+except Exception as exc:
+    print(f"  Team lookup skipped for arsenal_scores: {exc}")
+    if "team" not in arsenal.columns:
+        arsenal["team"] = ""
+
 arsenal.to_parquet(os.path.join(DATA_DIR,"arsenal_scores.parquet"), index=False)
 print("  Saved arsenal_scores.parquet")
+
+pt_out = _merge_frozen(pitch_base.drop(columns=["weighted"], errors="ignore"), "pitch_type_scores")
+try:
+    from team_utils import attach_teams
+    pt_out = attach_teams(pt_out)
+except Exception as exc:
+    print(f"  Team lookup skipped for pitch_type_scores: {exc}")
+    if "team" not in pt_out.columns:
+        pt_out["team"] = ""
+pt_out.to_parquet(os.path.join(DATA_DIR, "pitch_type_scores.parquet"), index=False)
+print("  Saved pitch_type_scores.parquet")
 
 # ── 7. Decile validation (per role) ─────────────────────────────────────────
 decile_frames = []
@@ -417,6 +510,7 @@ for season in all_seasons:
         pitcher_shap_frames.append(ps)
 
 pitcher_shap = pd.concat(pitcher_shap_frames, ignore_index=True)
+pitcher_shap = _merge_frozen(pitcher_shap, "pitcher_shap_allpitch")
 pitcher_shap.to_parquet(os.path.join(DATA_DIR, "pitcher_shap_allpitch.parquet"), index=False)
 
 # Backward-compat Four-Seam file
@@ -424,6 +518,11 @@ fb_pitcher_shap = pitcher_shap[pitcher_shap["pitch_group"] == "Four-Seam FB"]
 fb_pitcher_shap.to_parquet(os.path.join(DATA_DIR, "pitcher_shap_4seam.parquet"), index=False)
 print(f"  Saved pitcher_shap_allpitch.parquet ({len(pitcher_shap)} rows, {all_seasons})")
 print(f"  Saved pitcher_shap_4seam.parquet    ({len(fb_pitcher_shap)} rows, backward compat)")
+
+from datetime import datetime, timezone
+(Path := __import__("pathlib").Path)(DATA_DIR).joinpath("last_updated.txt").write_text(
+    datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+)
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 print("\n" + "="*60)

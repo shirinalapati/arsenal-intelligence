@@ -1,0 +1,82 @@
+name: Update 2026 Arsenal Intelligence Data
+
+# Live Statcast refresh through the 2026 regular season (ends ~Oct 5).
+on:
+  schedule:
+    - cron: "0 8,14,20,2 * * *"   # 4× daily UTC
+  workflow_dispatch:
+
+concurrency:
+  group: arsenal-intelligence-2026
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache training Statcast (2023–2025)
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/statcast_2023.parquet
+            data/statcast_2024.parquet
+            data/statcast_2025.parquet
+            data/statcast_2023_2025.parquet
+          key: statcast-training-v1
+          restore-keys: statcast-training-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ensure 2023–2025 training data
+        run: |
+          if [ ! -f data/statcast_2023.parquet ] || [ ! -f data/statcast_2024.parquet ] || [ ! -f data/statcast_2025.parquet ]; then
+            python fetch_statcast.py
+          else
+            echo "Training seasons cached."
+          fi
+
+      - name: Fetch 2026 Statcast chunks
+        run: python fetch_statcast_2026.py
+
+      - name: Recompute aggregates and models
+        run: python precompute.py
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f \
+            data/statcast_2026*.parquet \
+            data/statcast_2026.parquet \
+            data/arsenal_scores.parquet \
+            data/pitch_type_scores.parquet \
+            data/decile_outcomes.parquet \
+            data/pitch_type_summary.parquet \
+            data/model_coefs.parquet \
+            data/pitcher_shap_allpitch.parquet \
+            data/pitcher_shap_4seam.parquet \
+            data/shap_values_allpitch.parquet \
+            data/shap_values_4seam.parquet \
+            data/frozen_arsenal_scores_2023_2025.parquet \
+            data/frozen_pitch_type_scores_2023_2025.parquet \
+            data/frozen_pitcher_shap_allpitch_2023_2025.parquet \
+            data/last_updated.txt
+          if git diff --cached --quiet; then
+            echo "No Arsenal Intelligence data changes."
+            exit 0
+          fi
+          git commit -m "chore: refresh 2026 Arsenal Intelligence [$(date -u '+%Y-%m-%d %H:%M UTC')]"
+          git push

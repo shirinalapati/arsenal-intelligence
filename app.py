@@ -1,6 +1,6 @@
 """
 MLB Pitch Stuff+ Dashboard
-An interpretable pitch quality scoring app built on 2023–2025 Statcast data.
+An interpretable pitch quality scoring app built on 2023–2026 Statcast data.
 """
 
 import os
@@ -10,6 +10,24 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+from team_filter import MLB_TEAMS, pitcher_matches_team
+
+try:
+    import statsmodels.api  # noqa: F401 — required by plotly trendline="ols"
+
+    _HAS_STATSMODELS = True
+except ImportError:
+    _HAS_STATSMODELS = False
+
+
+def px_scatter_trendline(df: pd.DataFrame, **kwargs):
+    """Scatter plot with OLS trendline when statsmodels is available."""
+    tl = "ols" if _HAS_STATSMODELS and len(df) >= 3 else None
+    try:
+        return px.scatter(df, trendline=tl, **kwargs)
+    except Exception:
+        return px.scatter(df, trendline=None, **kwargs)
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -75,7 +93,7 @@ st.markdown(f"""
 # ── Data loading ─────────────────────────────────────────────────────────────
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
-@st.cache_data
+@st.cache_data(ttl=120)
 def load_data():
     arsenal     = pd.read_parquet(os.path.join(DATA_DIR, "arsenal_scores.parquet"))
     pt_scores   = pd.read_parquet(os.path.join(DATA_DIR, "pitch_type_scores.parquet"))
@@ -100,6 +118,19 @@ def load_data():
 arsenal, pt_scores, coefs, decile, pt_summary, shap_global, shap_pitch = load_data()
 
 SEASONS       = sorted(arsenal["season"].unique(), reverse=True)
+CURRENT_SEASON = max(SEASONS) if len(SEASONS) else 2026
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+LAST_UPDATED_PATH = os.path.join(DATA_DIR, "last_updated.txt")
+last_updated = ""
+if os.path.exists(LAST_UPDATED_PATH):
+    last_updated = open(LAST_UPDATED_PATH).read().strip()
+
+RANK_PAGE_TITLES = {
+    "arsenal_stuff": "Full Arsenal Stuff+ Rankings",
+    "whiff_rate": "Full Whiff Rate Rankings",
+    "csw_rate": "Full CSW Rate Rankings",
+    "avg_xwoba": "Full xwOBA Against Rankings",
+}
 PITCH_GROUPS  = sorted(pt_scores["pitch_group"].unique())
 FEATURE_LABELS = [
     "Perceived Velocity", "Induced Vertical Break", "Arm-Side Horiz Break",
@@ -243,7 +274,9 @@ with st.sidebar:
 if page == "Overview":
     st.markdown(f"<div style='color:{ACCENT_COLOR}; font-size:2.8rem; font-weight:800; letter-spacing:0.04em; margin-bottom:2px;'>Arsenal Intelligence</div>", unsafe_allow_html=True)
     st.markdown(f"<h1 style='color:{WHITE}; margin-bottom:0;'>Overview</h1>", unsafe_allow_html=True)
-    st.markdown(f"<p style='color:{TEXT_MUTED}; font-size:1rem; margin-top:4px;'>An interpretable pitch quality model built on 2023–2025 Statcast data</p>", unsafe_allow_html=True)
+    st.markdown(f"<p style='color:{TEXT_MUTED}; font-size:1rem; margin-top:4px;'>An interpretable pitch quality model built on 2023–{CURRENT_SEASON} Statcast data</p>", unsafe_allow_html=True)
+    if last_updated:
+        st.caption(f"Data last updated: **{last_updated}** (Statcast refresh)")
     st.divider()
 
     # ── Hero metrics
@@ -253,7 +286,8 @@ if page == "Overview":
         season_arsenal = season_arsenal[season_arsenal["role"] == ROLE_CODE]
     role_label = {"ALL": "All pitchers", "SP": "Starters", "RP": "Relievers"}[ROLE_CODE]
     with col1:
-        st.metric("Pitches Analyzed", "2.16M", f"{season_filter} · {role_label}")
+        n_p = int(season_arsenal["total_pitches"].sum()) if not season_arsenal.empty else 0
+        st.metric("Pitches Analyzed", f"{n_p:,}", f"{season_filter} · {role_label}")
     with col2:
         st.metric("Models", "SP + RP", "separate per pitch type")
     with col3:
@@ -687,9 +721,6 @@ elif page == "Pitcher Explorer":
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "Leaderboard":
     st.markdown(f"<div style='color:{ACCENT_COLOR}; font-size:2.8rem; font-weight:800; letter-spacing:0.04em; margin-bottom:2px;'>Arsenal Intelligence</div>", unsafe_allow_html=True)
-    st.markdown(f"<h1 style='color:{WHITE};'>Leaderboard</h1>", unsafe_allow_html=True)
-    st.markdown(f"<p style='color:{TEXT_MUTED};'>Rankings by arsenal-weighted Stuff+ score for {season_filter}.</p>", unsafe_allow_html=True)
-    st.divider()
 
     col_f1, col_f2 = st.columns([1, 1])
     with col_f1:
@@ -704,6 +735,28 @@ elif page == "Leaderboard":
         }
         rank_by = st.selectbox("Rank by", list(rank_labels.keys()),
                                format_func=lambda x: rank_labels[x])
+
+    col_s1, col_s2 = st.columns([1, 1])
+    with col_s1:
+        search_q = st.text_input("Search pitcher", placeholder="Type a name…")
+    with col_s2:
+        team_q = st.selectbox("Team", ["All"] + MLB_TEAMS)
+
+    rank_title = RANK_PAGE_TITLES.get(rank_by, "Full Rankings")
+    st.markdown(f"<h1 style='color:{WHITE};'>{rank_title}</h1>", unsafe_allow_html=True)
+    st.markdown(
+        f"<p style='color:{TEXT_MUTED};'>Season {season_filter}"
+        + (f" · updated {last_updated}" if last_updated else "")
+        + "</p>",
+        unsafe_allow_html=True,
+    )
+    if season_filter == CURRENT_SEASON:
+        st.info(
+            "**2026 live season:** Rankings include all pitchers with Statcast data. "
+            "Rows highlighted in **yellow** are below the low-sample pitch threshold — "
+            "interpret Stuff+ and outcome rates with caution until more pitches accumulate."
+        )
+    st.divider()
 
     # Pitch type picker only appears when "Stuff+ (by pitch type)" is selected
     if rank_by == "stuff_plus":
@@ -730,7 +783,7 @@ elif page == "Leaderboard":
         lb_df = lb_df.copy().sort_values("stuff_plus", ascending=False).head(50)
         score_col  = "stuff_plus"
         score_label = "Pitch Stuff+"
-        show_cols = ["player_name", "role", "pitch_group", "n_pitches", "stuff_plus",
+        show_cols = ["player_name", "role", "team", "pitch_group", "n_pitches", "stuff_plus",
                      "avg_velo", "avg_spin", "avg_ivb", "whiff_rate", "csw_rate", "avg_xwoba"]
 
     # ── Arsenal view: shows full-arsenal weighted average
@@ -748,8 +801,20 @@ elif page == "Leaderboard":
         lb_df.index = lb_df.index + 1
         score_col   = sort_col
         score_label = rank_labels.get(sort_col, sort_col)
-        show_cols = ["player_name", "role", "total_pitches", "arsenal_stuff",
+        show_cols = ["player_name", "role", "team", "total_pitches", "arsenal_stuff",
                      "avg_velo", "avg_spin", "whiff_rate", "csw_rate", "avg_xwoba"]
+        if rank_by != "arsenal_stuff":
+            rank_title = RANK_PAGE_TITLES.get(sort_col, rank_title)
+
+    # Search / team filters (all seasons including 2026)
+    if search_q.strip():
+        lb_df = lb_df[lb_df["player_name"].str.contains(search_q.strip(), case=False, na=False)]
+    if team_q != "All" and "team" in lb_df.columns:
+        lb_df = lb_df[lb_df["team"].fillna("").apply(lambda t: pitcher_matches_team(str(t), team_q))]
+
+    if pitch_filter:
+        rank_title = f"Full {pitch_filter[0]} Stuff+ Rankings"
+        st.markdown(f"<h1 style='color:{WHITE};'>{rank_title}</h1>", unsafe_allow_html=True)
 
     # ── Top 10 bar chart
     bar_fmt = {
@@ -784,9 +849,10 @@ elif page == "Leaderboard":
     st.plotly_chart(fig6, use_container_width=True)
 
     # ── Full sortable table
-    table_title = f"Pitch Type Rankings — {', '.join(pitch_filter)}" if pitch_filter else "Full Arsenal Rankings"
+    table_title = rank_title
     st.markdown(f"<div class='section-header'>{table_title}</div>", unsafe_allow_html=True)
-    disp = lb_df[show_cols].copy()
+    disp_raw = lb_df[show_cols + (["low_sample"] if "low_sample" in lb_df.columns else [])].copy()
+    disp = disp_raw.drop(columns=["low_sample"], errors="ignore").copy()
     fmt_map = {
         "arsenal_stuff": "{:.1f}", "stuff_plus": "{:.1f}",
         "avg_velo": "{:.1f}", "avg_spin": "{:.0f}", "avg_ivb": "{:.1f}",
@@ -797,14 +863,25 @@ elif page == "Leaderboard":
         if col in disp.columns:
             disp[col] = disp[col].map(fmt.format)
     col_labels = {
-        "player_name": "Pitcher", "pitch_group": "Pitch Type",
+        "player_name": "Pitcher", "pitch_group": "Pitch Type", "team": "Team",
         "total_pitches": "Pitches", "n_pitches": "Pitches",
         "arsenal_stuff": "Arsenal Stuff+", "stuff_plus": "Stuff+",
         "avg_velo": "Velo (mean)", "avg_spin": "Spin (mean)", "avg_ivb": "iVB (mean)",
         "whiff_rate": "Whiff% (mean)", "csw_rate": "CSW% (mean)", "avg_xwoba": "xwOBA (mean)",
     }
     disp = disp.rename(columns=col_labels)
-    st.dataframe(disp, use_container_width=True, height=500)
+
+    if season_filter == CURRENT_SEASON and "low_sample" in disp_raw.columns and disp_raw["low_sample"].any():
+        low_flags = disp_raw["low_sample"].tolist()
+
+        def _highlight(row):
+            if row.name < len(low_flags) and low_flags[row.name]:
+                return ["background-color: #3d3520"] * len(row)
+            return [""] * len(row)
+
+        st.dataframe(disp.style.apply(_highlight, axis=1), use_container_width=True, height=500)
+    else:
+        st.dataframe(disp, use_container_width=True, height=500)
 
     # ── Scatter: Stuff+ vs outcome
     st.markdown("<div class='section-header'>Stuff+ vs Outcomes (Pitcher Level)</div>", unsafe_allow_html=True)
@@ -816,66 +893,77 @@ elif page == "Leaderboard":
     if ROLE_CODE != "ALL":
         scatter_df = scatter_df[scatter_df["role"] == ROLE_CODE]
     scatter_df = scatter_df.dropna(subset=["whiff_rate", "avg_xwoba"])
+    if search_q.strip():
+        scatter_df = scatter_df[
+            scatter_df["player_name"].str.contains(search_q.strip(), case=False, na=False)
+        ]
+    if team_q != "All" and "team" in scatter_df.columns:
+        scatter_df = scatter_df[
+            scatter_df["team"].fillna("").apply(lambda t: pitcher_matches_team(str(t), team_q))
+        ]
 
-    with c1:
-        fig7 = px.scatter(
-            scatter_df, x="arsenal_stuff", y="whiff_rate",
-            hover_data={"player_name": True, "total_pitches": True,
-                        "arsenal_stuff": ":.1f", "whiff_rate": ":.1%"},
-            color="whiff_rate", color_continuous_scale="RdYlGn",
-            trendline="ols", opacity=0.7,
-            labels={"arsenal_stuff": "Arsenal Stuff+", "whiff_rate": "Whiff Rate"},
-            title="Stuff+ vs Whiff Rate"
-        )
-        corr_w = scatter_df["arsenal_stuff"].corr(scatter_df["whiff_rate"])
-        fig7.update_layout(
-            paper_bgcolor=DARK_BG, plot_bgcolor=DARK_BG, font=dict(color=WHITE),
-            height=380, margin=dict(t=40, b=30), showlegend=False,
-            coloraxis_showscale=False,
-            title=dict(text=f"Stuff+ vs Whiff Rate  (r = {corr_w:.2f})"),
-            yaxis=dict(tickformat=".0%", gridcolor="#2A2D3A"),
-            xaxis=dict(gridcolor="#2A2D3A"),
-        )
-        st.plotly_chart(fig7, use_container_width=True)
-        st.caption(
-            f"Each dot is one pitcher-season. Arsenal Stuff+ (x-axis) is the usage-weighted average "
-            f"pitch quality score across their entire arsenal. Whiff Rate (y-axis) is the percentage "
-            f"of swings that resulted in a miss. The blue trendline shows the positive relationship — "
-            f"pitchers with higher Arsenal Stuff+ tend to generate more swing-and-misses. "
-            f"r = {corr_w:.2f} indicates a {'moderate' if abs(corr_w) < 0.5 else 'strong'} correlation. "
-            f"NOTE: Unlike the decile chart above which measures individual pitch Stuff+, this chart "
-            f"aggregates to the pitcher-season level — introducing noise from pitch mix, command, "
-            f"sequencing, and opponent quality."
-        )
+    if scatter_df.empty:
+        st.caption("Not enough pitchers match the current filters to show scatter plots.")
+    else:
+        with c1:
+            fig7 = px_scatter_trendline(
+                scatter_df, x="arsenal_stuff", y="whiff_rate",
+                hover_data={"player_name": True, "total_pitches": True,
+                            "arsenal_stuff": ":.1f", "whiff_rate": ":.1%"},
+                color="whiff_rate", color_continuous_scale="RdYlGn",
+                opacity=0.7,
+                labels={"arsenal_stuff": "Arsenal Stuff+", "whiff_rate": "Whiff Rate"},
+                title="Stuff+ vs Whiff Rate",
+            )
+            corr_w = scatter_df["arsenal_stuff"].corr(scatter_df["whiff_rate"])
+            fig7.update_layout(
+                paper_bgcolor=DARK_BG, plot_bgcolor=DARK_BG, font=dict(color=WHITE),
+                height=380, margin=dict(t=40, b=30), showlegend=False,
+                coloraxis_showscale=False,
+                title=dict(text=f"Stuff+ vs Whiff Rate  (r = {corr_w:.2f})"),
+                yaxis=dict(tickformat=".0%", gridcolor="#2A2D3A"),
+                xaxis=dict(gridcolor="#2A2D3A"),
+            )
+            st.plotly_chart(fig7, use_container_width=True)
+            st.caption(
+                f"Each dot is one pitcher-season. Arsenal Stuff+ (x-axis) is the usage-weighted average "
+                f"pitch quality score across their entire arsenal. Whiff Rate (y-axis) is the percentage "
+                f"of swings that resulted in a miss. The blue trendline shows the positive relationship — "
+                f"pitchers with higher Arsenal Stuff+ tend to generate more swing-and-misses. "
+                f"r = {corr_w:.2f} indicates a {'moderate' if abs(corr_w) < 0.5 else 'strong'} correlation. "
+                f"NOTE: Unlike the decile chart above which measures individual pitch Stuff+, this chart "
+                f"aggregates to the pitcher-season level — introducing noise from pitch mix, command, "
+                f"sequencing, and opponent quality."
+            )
 
-    with c2:
-        fig8 = px.scatter(
-            scatter_df, x="arsenal_stuff", y="avg_xwoba",
-            hover_data={"player_name": True, "total_pitches": True,
-                        "arsenal_stuff": ":.1f", "avg_xwoba": ":.3f"},
-            color="avg_xwoba", color_continuous_scale="RdYlGn_r",
-            trendline="ols", opacity=0.7,
-            labels={"arsenal_stuff": "Arsenal Stuff+", "avg_xwoba": "xwOBA Against"},
-            title="Stuff+ vs xwOBA Against"
-        )
-        corr_x = scatter_df["arsenal_stuff"].corr(scatter_df["avg_xwoba"])
-        fig8.update_layout(
-            paper_bgcolor=DARK_BG, plot_bgcolor=DARK_BG, font=dict(color=WHITE),
-            height=380, margin=dict(t=40, b=30), showlegend=False,
-            coloraxis_showscale=False,
-            title=dict(text=f"Stuff+ vs xwOBA Against  (r = {corr_x:.2f})"),
-            yaxis=dict(gridcolor="#2A2D3A"),
-            xaxis=dict(gridcolor="#2A2D3A"),
-        )
-        st.plotly_chart(fig8, use_container_width=True)
-        st.caption(
-            f"Each dot is one pitcher-season. Arsenal Stuff+ (x-axis) is plotted against xwOBA Against "
-            f"(y-axis) — the expected quality of contact allowed, where lower is better for the pitcher. "
-            f"The downward-sloping trendline confirms that higher Arsenal Stuff+ is associated with weaker contact "
-            f"quality allowed. r = {corr_x:.2f} is a weaker relationship than the whiff rate chart, "
-            f"which is expected: contact quality is influenced by many factors beyond raw pitch stuff, "
-            f"including pitch location, sequencing, ballpark, and opponent quality."
-        )
+        with c2:
+            fig8 = px_scatter_trendline(
+                scatter_df, x="arsenal_stuff", y="avg_xwoba",
+                hover_data={"player_name": True, "total_pitches": True,
+                            "arsenal_stuff": ":.1f", "avg_xwoba": ":.3f"},
+                color="avg_xwoba", color_continuous_scale="RdYlGn_r",
+                opacity=0.7,
+                labels={"arsenal_stuff": "Arsenal Stuff+", "avg_xwoba": "xwOBA Against"},
+                title="Stuff+ vs xwOBA Against",
+            )
+            corr_x = scatter_df["arsenal_stuff"].corr(scatter_df["avg_xwoba"])
+            fig8.update_layout(
+                paper_bgcolor=DARK_BG, plot_bgcolor=DARK_BG, font=dict(color=WHITE),
+                height=380, margin=dict(t=40, b=30), showlegend=False,
+                coloraxis_showscale=False,
+                title=dict(text=f"Stuff+ vs xwOBA Against  (r = {corr_x:.2f})"),
+                yaxis=dict(gridcolor="#2A2D3A"),
+                xaxis=dict(gridcolor="#2A2D3A"),
+            )
+            st.plotly_chart(fig8, use_container_width=True)
+            st.caption(
+                f"Each dot is one pitcher-season. Arsenal Stuff+ (x-axis) is plotted against xwOBA Against "
+                f"(y-axis) — the expected quality of contact allowed, where lower is better for the pitcher. "
+                f"The downward-sloping trendline confirms that higher Arsenal Stuff+ is associated with weaker contact "
+                f"quality allowed. r = {corr_x:.2f} is a weaker relationship than the whiff rate chart, "
+                f"which is expected: contact quality is influenced by many factors beyond raw pitch stuff, "
+                f"including pitch location, sequencing, ballpark, and opponent quality."
+            )
 
     show_glossary()
 
@@ -887,7 +975,7 @@ elif page == "How the Model Works + Important Findings":
     st.markdown(f"<div style='color:{ACCENT_COLOR}; font-size:2.8rem; font-weight:800; letter-spacing:0.04em; margin-bottom:2px;'>Arsenal Intelligence</div>", unsafe_allow_html=True)
     st.markdown(f"<h1 style='color:{WHITE};'>How the Model Works</h1>", unsafe_allow_html=True)
     st.markdown(f"<p style='color:{TEXT_MUTED};'>Model design, feature weights, and SHAP explainability.</p>", unsafe_allow_html=True)
-    st.caption("A pitch type is included in the model only if it has at least 2,000 swing events in the 2023–2025 dataset. This ensures each model has enough data for reliable training. Pitch types below this threshold (e.g. rare variants) are excluded.")
+    st.caption("A pitch type is included in the model only if it has at least 2,000 swing events in the 2023–2026 dataset. This ensures each model has enough data for reliable training. Pitch types below this threshold (e.g. rare variants) are excluded.")
     st.divider()
 
     col_left, col_right = st.columns([1, 1.3])
@@ -1104,7 +1192,7 @@ elif page == "About":
                         margin-bottom:12px;'>What Is This?</div>
             <p style='color:{TEXT_MUTED}; line-height:1.75; font-size:0.92rem;'>
                 This dashboard builds and explains a <b style='color:{WHITE};'>pitch "stuff" quality score</b>
-                for every MLB pitcher using three seasons of Statcast tracking data (2023–2025).
+                for every MLB pitcher using Statcast tracking data (2023–2026).
                 The score answers one question: <em style='color:{WHITE};'>based purely on a pitch's
                 physical characteristics, how likely is it to generate a swing-and-miss?</em>
             </p>
@@ -1113,6 +1201,21 @@ elif page == "About":
                 Stuff+ isolates the <b style='color:{WHITE};'>raw physical quality</b> of each pitch —
                 velocity, movement, spin, and location — and converts it into a single comparable number.
             </p>
+            <div style='background:#1e3a5f; border-radius:8px; padding:14px 18px;
+                        border:1px solid #2A2D3A; margin:12px 0;'>
+                <div style='color:{ACCENT_COLOR}; font-weight:700; margin-bottom:6px;'>2026 live season</div>
+                <div style='color:{TEXT_MUTED}; font-size:0.88rem; line-height:1.65;'>
+                    The dashboard includes <b style='color:{WHITE};'>2026 in-season data</b> that refreshes
+                    automatically through the regular season (ends early October). GitHub Actions pulls new
+                    Statcast pitches about <b style='color:{WHITE};'>4× per day</b>; this app reloads data
+                    every <b style='color:{WHITE};'>2 minutes</b>. Completed seasons (2023–2025) are frozen
+                    snapshots — selecting those years shows the same scores as before. For 2026, sample sizes
+                    are still building: pitchers highlighted in <b style='color:#fbbf24;'>yellow</b> on the
+                    Leaderboard are below the current low-sample pitch threshold (~35% of role median).
+                    SP/RP labels use the same avg-pitches-per-game rule as prior seasons, supplemented by
+                    MLB games-started data when appearances are still sparse.
+                </div>
+            </div>
             <p style='color:{TEXT_MUTED}; line-height:1.75; font-size:0.92rem;'>
                 Crucially, the model is <b style='color:{WHITE};'>interpretable by design</b>: you can see
                 exactly which components drive any pitcher's score, making it useful for scouting,
