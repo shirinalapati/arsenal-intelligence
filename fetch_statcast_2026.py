@@ -44,6 +44,19 @@ MONTHS_2026 = [
     ("2026-10-01", "2026-10-05"),
 ]
 
+_INT_COLS = ("pitcher", "batter", "game_pk", "balls", "strikes", "outs_when_up", "inning", "zone", "season")
+
+
+def _normalize_chunk(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep dtypes stable across monthly cache files (avoids pyarrow concat errors)."""
+    out = df.copy()
+    if "game_date" in out.columns:
+        out["game_date"] = pd.to_datetime(out["game_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    for col in _INT_COLS:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").astype("Int64")
+    return out
+
 
 def _trim_end(end: str) -> str:
     cap = min(date.today(), SEASON_END).isoformat()
@@ -76,7 +89,7 @@ def fetch_2026(force: bool = False) -> pd.DataFrame:
         cache_path = os.path.join(DATA_DIR, f"statcast_2026_{start[:7]}.parquet")
         if not _cache_stale(cache_path, start, force):
             print(f"  {start[:7]}: cache")
-            frames.append(pd.read_parquet(cache_path))
+            frames.append(_normalize_chunk(pd.read_parquet(cache_path)))
             continue
         for attempt in range(3):
             try:
@@ -86,7 +99,7 @@ def fetch_2026(force: bool = False) -> pd.DataFrame:
                     print("    empty chunk")
                     break
                 keep = [c for c in COLS_NEEDED if c in df.columns]
-                df = df[keep].copy()
+                df = _normalize_chunk(df[keep])
                 df["season"] = 2026
                 df.to_parquet(cache_path, index=False)
                 frames.append(df)
@@ -103,6 +116,7 @@ def fetch_2026(force: bool = False) -> pd.DataFrame:
         raise SystemExit("No 2026 Statcast data fetched.")
 
     out = pd.concat(frames, ignore_index=True)
+    out = _normalize_chunk(out)
     out_path = os.path.join(DATA_DIR, "statcast_2026.parquet")
     out.to_parquet(out_path, index=False)
     print(f"\n2026 total: {len(out):,} pitches → {out_path}")
