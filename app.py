@@ -776,10 +776,15 @@ elif page == "Leaderboard":
         unsafe_allow_html=True,
     )
     if season_filter == CURRENT_SEASON:
+        sp_med = arsenal.loc[(arsenal["season"] == CURRENT_SEASON) & (arsenal["role"] == "SP"), "total_pitches"].median()
+        rp_med = arsenal.loc[(arsenal["season"] == CURRENT_SEASON) & (arsenal["role"] == "RP"), "total_pitches"].median()
+        sp_low_n = int(max(150, sp_med * 0.35)) if pd.notna(sp_med) else 150
+        rp_low_n = int(max(80, rp_med * 0.35)) if pd.notna(rp_med) else 80
         st.info(
-            "**2026 live season:** Rankings include all pitchers with Statcast data. "
-            "Rows highlighted in **yellow** are below the low-sample pitch threshold — "
-            "interpret Stuff+ and outcome rates with caution until more pitches accumulate."
+            f"**2026 live season:** Yellow rows are below the low-sample threshold — "
+            f"**SP under {sp_low_n:,}** pitches or **RP under {rp_low_n:,}** pitches "
+            f"(max of a floor and 35% of the current role median). "
+            f"The **Min pitches** slider above (default {min_pitches}) is separate: it filters who appears, not who is flagged."
         )
     st.divider()
 
@@ -823,7 +828,6 @@ elif page == "Leaderboard":
             lb_df = lb_df[lb_df["role"] == ROLE_CODE]
         asc = sort_col == "avg_xwoba"
         lb_df = lb_df.copy().sort_values(sort_col, ascending=asc).reset_index(drop=True)
-        lb_df.index = lb_df.index + 1
         score_col   = sort_col
         score_label = rank_labels.get(sort_col, sort_col)
         show_cols = ["player_name", "role", "team", "total_pitches", "arsenal_stuff",
@@ -897,10 +901,10 @@ elif page == "Leaderboard":
     disp = disp.rename(columns=col_labels)
 
     if season_filter == CURRENT_SEASON and "low_sample" in disp_raw.columns and disp_raw["low_sample"].any():
-        low_flags = disp_raw["low_sample"].tolist()
+        low_flags = disp_raw["low_sample"].astype(bool).tolist()
 
         def _highlight(row):
-            if row.name < len(low_flags) and low_flags[row.name]:
+            if low_flags[row.name]:
                 return ["background-color: #3d3520"] * len(row)
             return [""] * len(row)
 
