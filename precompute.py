@@ -339,14 +339,8 @@ arsenal = _merge_frozen(arsenal, "arsenal_scores")
 if "low_sample" not in arsenal.columns:
     arsenal["low_sample"] = False
 try:
-    from team_utils import attach_teams
-    if "team" not in arsenal.columns or arsenal["team"].isna().all():
-        arsenal = attach_teams(arsenal)
-    else:
-        missing = arsenal["team"].isna() | (arsenal["team"] == "")
-        if missing.any():
-            filled = attach_teams(arsenal.loc[missing].drop(columns=["team"], errors="ignore"))
-            arsenal.loc[missing, "team"] = filled["team"].values
+    from team_utils import fill_missing_teams
+    arsenal = fill_missing_teams(arsenal, statcast_df=raw)
 except Exception as exc:
     print(f"  Team lookup skipped for arsenal_scores: {exc}")
     if "team" not in arsenal.columns:
@@ -357,8 +351,8 @@ print("  Saved arsenal_scores.parquet")
 
 pt_out = _merge_frozen(pitch_base.drop(columns=["weighted"], errors="ignore"), "pitch_type_scores")
 try:
-    from team_utils import attach_teams
-    pt_out = attach_teams(pt_out)
+    from team_utils import fill_missing_teams
+    pt_out = fill_missing_teams(pt_out, statcast_df=raw)
 except Exception as exc:
     print(f"  Team lookup skipped for pitch_type_scores: {exc}")
     if "team" not in pt_out.columns:
